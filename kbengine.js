@@ -835,6 +835,8 @@ function KBEENTITY()
 	this.cell = null;
 	this.base = null;
 	
+	this.inWorld = false;
+	
 	KBEENTITY.prototype.baseCall = function()
 	{
 		if(arguments.length < 1)
@@ -909,6 +911,28 @@ function KBEENTITY()
 		}
 		
 		this.cell.postMail();
+	}
+	
+	KBEENTITY.prototype.onEnterWorld = function()
+	{
+		console.info(this.classtype + '::onEnterWorld: ' + this.id); 
+		this.inWorld = true;
+	}
+	
+	KBEENTITY.prototype.onLeaveWorld = function()
+	{
+		console.info(this.classtype + '::onLeaveWorld: ' + this.id); 
+		this.inWorld = false;
+	}
+	
+	KBEENTITY.prototype.onEnterSpace = function()
+	{
+		console.info(this.classtype + '::onEnterSpace: ' + this.id); 
+	}
+	
+	KBEENTITY.prototype.onLeaveSpace = function()
+	{
+		console.info(this.classtype + '::onLeaveSpace: ' + this.id); 
 	}
 }
 
@@ -1473,7 +1497,11 @@ function KBENGINE()
 		this.serverdatas = "";
 		this.clientdatas = "";
 		this.serverVersion = "";
-		this.clientVersion = "0.1.8";
+		this.serverScriptVersion = "";
+		this.serverProtocolMD5 = "";
+		this.serverEntityDefMD5 = "";
+		this.clientVersion = "0.1.13";
+		this.clientScriptVersion = "0.1.0";
 		this.entity_uuid = null;
 		this.entity_id = 0;
 		this.entity_type = "";
@@ -1493,11 +1521,14 @@ function KBENGINE()
 	this.hello = function()
 	{  
 		var bundle = new KBE_BUNDLE();
+		
 		if(g_kbengine.currserver == "loginapp")
 			bundle.newMessage(g_messages.Loginapp_hello);
 		else
 			bundle.newMessage(g_messages.Baseapp_hello);
+		
 		bundle.writeString(g_kbengine.clientVersion);
+		bundle.writeString(g_kbengine.clientScriptVersion);
 		bundle.writeBlob(g_kbengine.clientdatas);
 		bundle.send(g_kbengine);
 	}
@@ -1594,19 +1625,23 @@ function KBENGINE()
 		var dateObject = new Date();
 		if((dateObject.getTime() - g_kbengine.lastticktime) / 1000 > 15)
 		{
-			if(g_messages.Loginapp_onClientActiveTick != undefined || g_messages.Baseapp_onClientActiveTick != undefined)
+			if(g_kbengine.currserver == "loginapp")
 			{
-				var bundle = new KBE_BUNDLE();
-				if(g_kbengine.currserver == "loginapp")
+				if(g_messages.Loginapp_onClientActiveTick != undefined)
 				{
+					var bundle = new KBE_BUNDLE();
 					bundle.newMessage(g_messages.Loginapp_onClientActiveTick);
+					bundle.send(g_kbengine);
 				}
-				else
+			}
+			else
+			{
+				if(g_messages.Baseapp_onClientActiveTick != undefined)
 				{
+					var bundle = new KBE_BUNDLE();
 					bundle.newMessage(g_messages.Baseapp_onClientActiveTick);
+					bundle.send(g_kbengine);
 				}
-				
-				bundle.send(g_kbengine);
 			}
 			
 			g_kbengine.lastticktime = dateObject.getTime();
@@ -1939,7 +1974,13 @@ function KBENGINE()
 		this.serverVersion = stream.readString();
 		console.error("Client_onVersionNotMatch: verInfo=" + g_kbengine.clientVersion + " not match(server: " + this.serverVersion + ")");
 	}
-		
+
+	this.Client_onScriptVersionNotMatch = function(stream)
+	{
+		this.serverScriptVersion = stream.readString();
+		console.error("Client_onScriptVersionNotMatch: verInfo=" + g_kbengine.clientScriptVersion + " not match(server: " + this.serverScriptVersion + ")");
+	}
+	
 	this.onImportEntityDefCompleted = function()
 	{
 		console.info("KBENGINE::onImportEntityDefCompleted: successfully!");
@@ -2144,11 +2185,39 @@ function KBENGINE()
 		}
 	}
 	
+	this.relogin_baseapp = function()
+	{  
+		console.info("KBENGINE::relogin_baseapp: start connect to ws://" + g_kbengine.ip + ":" + g_kbengine.port + "!");
+		g_kbengine.connect("ws://" + g_kbengine.ip + ":" + g_kbengine.port);
+		g_kbengine.socket.onopen = g_kbengine.onReOpenBaseapp;  
+	}
+	
+	this.onReOpenBaseapp = function()
+	{
+		console.info("KBENGINE::onReOpenBaseapp: successfully!");
+		g_kbengine.currserver = "baseapp";
+		
+		var bundle = new KBE_BUNDLE();
+		bundle.newMessage(g_messages.Baseapp_reLoginGateway);
+		bundle.writeString(g_kbengine.username);
+		bundle.writeString(g_kbengine.password);
+		bundle.writeUint64(g_kbengine.entity_uuid);
+		bundle.writeInt32(g_kbengine.entity_id);
+		bundle.send(g_kbengine);
+	}
+	
 	this.Client_onHelloCB = function(args)
 	{
 		g_kbengine.serverVersion = args.readString();
+		g_kbengine.serverScriptVersion = args.readString();
+		g_kbengine.serverProtocolMD5 = args.readString();
+		g_kbengine.serverEntityDefMD5 = args.readString();
+		
 		var ctype = args.readInt32();
-		console.info("KBENGINE::Client_onHelloCB: verInfo(" + g_kbengine.serverVersion + "), ctype(" + ctype + ")!");
+		
+		console.info("KBENGINE::Client_onHelloCB: verInfo(" + g_kbengine.serverVersion + "), scriptVerInfo(" + 
+			g_kbengine.serverScriptVersion + "), serverProtocolMD5(" + g_kbengine.serverProtocolMD5 + "), serverEntityDefMD5(" + 
+			g_kbengine.serverEntityDefMD5 + "), ctype(" + ctype + ")!");
 	}
 	
 	this.Client_onLoginFailed = function(args)
@@ -2176,6 +2245,12 @@ function KBENGINE()
 	{
 		console.error("KBENGINE::Client_onLoginGatewayFailed: failedcode(" + failedcode + ")!");
 	}
+
+	this.Client_onReLoginGatewaySuccessfully = function(stream)
+	{
+		g_kbengine.entity_uuid = stream.readUint64();
+		console.error("KBENGINE::Client_onReLoginGatewaySuccessfully: " + g_kbengine.username);
+	}
 	
 	this.entityclass = {};
 	this.getentityclass = function(entityType)
@@ -2200,6 +2275,15 @@ function KBENGINE()
 	this.Client_onCreatedProxies = function(rndUUID, eid, entityType)
 	{
 		console.info("KBENGINE::Client_onCreatedProxies: eid(" + eid + "), entityType(" + entityType + ")!");
+		
+		var entity = g_kbengine.entities[eid];
+		
+		if(entity != undefined)
+		{
+			console.warn("KBENGINE::Client_onCreatedProxies: entity(" + eid + ") has exist!");
+			return;
+		}
+		
 		g_kbengine.entity_uuid = rndUUID;
 		g_kbengine.entity_id = eid;
 		
@@ -2232,6 +2316,12 @@ function KBENGINE()
 		{
 			id = g_kbengine.entityIDAliasIDList[stream.readUint8()];
 		}
+		
+		// 如果为0且客户端上一步是重登陆或者重连操作并且服务端entity在断线期间一直处于在线状态
+		// 则可以忽略这个错误, 因为cellapp可能一直在向baseapp发送同步消息， 当客户端重连上时未等
+		// 服务端初始化步骤开始则收到同步信息, 此时这里就会出错。
+		if(g_kbengine.entityIDAliasIDList.length == 0)
+			return 0;
 		
 		return id;
 	}
@@ -2379,13 +2469,20 @@ function KBENGINE()
 			delete g_bufferedCreateEntityMessage[eid];
 			
 			entity.__init__();
-			entity.enterWorld();
+			entity.onEnterWorld();
 		}
 		else
 		{
 			if(!entity.inWorld)
 			{
-				entity.enterWorld();
+				// 安全起见， 这里清空一下
+				// 如果服务端上使用giveClientTo切换控制权
+				// 之前的实体已经进入世界， 切换后的实体也进入世界， 这里可能会残留之前那个实体进入世界的信息
+				g_kbengine.entityIDAliasIDList = [];
+				g_kbengine.entities = {}
+				g_kbengine.entities[entity.id] = entity;
+			
+				entity.onEnterWorld();
 			}
 		}
 	}
@@ -2406,7 +2503,7 @@ function KBENGINE()
 		}
 		
 		if(entity.inWorld)
-			entity.leaveWorld();
+			entity.onLeaveWorld();
 		
 		if(g_kbengine.entity_id > 0 && eid != g_kbengine.entity_id)
 		{
@@ -2423,7 +2520,7 @@ function KBENGINE()
 		}
 		else
 		{
-			g_kbengine.clearSpace();
+			g_kbengine.clearSpace(false);
 			entity.cell = null;
 		}
 	}
@@ -2440,21 +2537,30 @@ function KBENGINE()
 		}
 
 		if(entity.inWorld)
-			entity.leaveWorld();
+			entity.onLeaveWorld();
+		
 		delete g_kbengine.entities[eid];
 	}
 	
-	this.Client_onEntityEnterSpace = function(spaceID, eid)
+	this.Client_onEntityEnterSpace = function(stream)
 	{
+		var eid = stream.readInt32();
+		var isOnGound = true;
+		
+		if(stream.opsize() > 0)
+			isOnGound = stream.readInt8();
+		
 		var entity = g_kbengine.entities[eid];
 		if(entity == undefined)
 		{
 			console.error("KBENGINE::Client_onEntityEnterSpace: entity(" + eid + ") not found!");
 			return;
 		}
+		
+		entity.onEnterSpace();
 	}
 	
-	this.Client_onEntityLeaveSpace = function(spaceID, eid)
+	this.Client_onEntityLeaveSpace = function(eid)
 	{
 		var entity = g_kbengine.entities[eid];
 		if(entity == undefined)
@@ -2462,6 +2568,9 @@ function KBENGINE()
 			console.error("KBENGINE::Client_onEntityLeaveSpace: entity(" + eid + ") not found!");
 			return;
 		}
+		
+		g_kbengine.clearSpace(false);
+		entity.onLeaveSpace();
 	}
 
 	this.Client_onKicked = function(failedcode)
@@ -2529,30 +2638,42 @@ function KBENGINE()
 		g_kbengine.spaceResPath = respath;
 	}
 
-	this.clearSpace = function()
+	this.clearSpace = function(isAll)
 	{
 		g_kbengine.entityIDAliasIDList = [];
 		g_kbengine.spacedata = {};
 		g_kbengine.isLoadedGeometry = false;
 		g_kbengine.spaceID = 0;
 		
-		var entity = g_kbengine.player();
-		
-		for (var eid in g_kbengine.entities)  
-		{ 
-			if(eid == entity.id)
-				continue;
+		if(!isAll)
+		{
+			var entity = g_kbengine.player();
 			
-		    g_kbengine.entities[eid].leaveWorld();
-		}  
-			
-		g_kbengine.entities = {}
-		g_kbengine.entities[entity.id] = entity;
+			for (var eid in g_kbengine.entities)  
+			{ 
+				if(eid == entity.id)
+					continue;
+				
+			    g_kbengine.entities[eid].onLeaveWorld();
+			}  
+				
+			g_kbengine.entities = {}
+			g_kbengine.entities[entity.id] = entity;
+		}
+		else
+		{
+			for (var eid in g_kbengine.entities)  
+			{ 
+			    g_kbengine.entities[eid].onLeaveWorld();
+			}  
+				
+			g_kbengine.entities = {}
+		}
 	}
 		
 	this.Client_initSpaceData = function(stream)
 	{
-		g_kbengine.clearSpace();
+		g_kbengine.clearSpace(false);
 		
 		g_kbengine.spaceID = stream.readInt32();
 		while(stream.opsize() > 0)
@@ -2873,6 +2994,13 @@ function KBENGINE()
 	
 	this._updateVolatileData = function(entityID, x, y, z, yaw, pitch, roll)
 	{
+		if(entityID == 0)
+		{
+			// 如果为0且客户端上一步是重登陆或者重连操作并且服务端entity在断线期间一直处于在线状态
+			// 则可以忽略这个错误, 因为cellapp可能一直在向baseapp发送同步消息， 当客户端重连上时未等
+			// 服务端初始化步骤开始则收到同步信息, 此时这里就会出错。
+			return;
+		}
 	}
 	
 	this.Client_onStreamDataStarted = function(id, datasize, descr)
